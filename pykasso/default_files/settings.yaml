@@ -9,10 +9,13 @@
 
 x0   : 0
 y0   : 0
+z0   : 0
 xnum : 300
 ynum : 300
+znum : 1
 dx   : 10
 dy   : 10
+dz   : 10
 
 ###############
 ### Polygon ###
@@ -74,8 +77,8 @@ fractures_max_orientation : [     20,   110]
 
 # For fracture size
 alpha : 2
-fractures_min_length : 100
-fractures_max_length : 4000
+fractures_min_length : [100, 100]
+fractures_max_length : [4000, 4000]
 
 ###############################
 ### Fast-Marching Algorithm ###

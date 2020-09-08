@@ -13,19 +13,22 @@ Released under the MIT license:
 
 import os
 import sys
-import yaml # dependance
-
 import math
-import mpmath # dependance
-import numpy    as np # dependance
-import numpy.ma as ma
-import pandas   as pd # dependance
 
+# Dependencies
+import yaml
+import mpmath
+import numpy    as np 
+import numpy.ma as ma
+import pandas   as pd
+import skfmm  
+import karstnet as kn 
 import matplotlib.pyplot as plt
 from   matplotlib.path import Path
+from matplotlib.patches import Rectangle
 
-import skfmm  # dependance
-import karstnet as kn # dependance
+import pyvista   as pv
+import pyvistaqt as pvqt
 
 #####
 # 1 #
@@ -81,146 +84,6 @@ def get_settings(example=False):
 
     return None
 
-
-#####
-# 2 #
-###################################
-# pyKasso class for data modeling #
-###################################
-
-###########
-class Grid():
-    """
-	Create a grid for the simulation.
-	The calculation points are located in the center of the cells, and the origin coordinates are located at the left-bottom of the grid.
-
-	Parameters
-	----------
-	x0 : float
-		x-coordinate origin.
-	y0 : float
-		y-coordinate origin.
-	xnum : integer
-		Number of cells on x dimension.
-	ynum : integer
-		Number of cells on y dimension.
-	dx : float
-		Width of a cell.
-	dy : float
-		Length of a cell.
-
-	Notes
-	-----
-	- On this version, dx and dy must be similar. pyKasso does not support unstructured grid yet.
-	- x0 and y0 are considered to be in the center of the first node.
-	"""
-
-    def __init__(self, x0, y0, xnum, ynum, dx, dy):
-        self.x0   = x0
-        self.y0   = y0
-        self.xnum = xnum
-        self.ynum = ynum
-        self.dx   = dx
-        self.dy   = dy
-
-        self.x        = np.arange(self.x0,self.x0+(self.xnum)*self.dx,self.dx,dtype=np.float_)
-        self.y        = np.arange(self.y0,self.y0+(self.ynum)*self.dy,self.dy,dtype=np.float_)
-        self.X,self.Y = np.meshgrid(self.x,self.y)
-        self.xlimits  = [self.x0-self.dx/2,self.x0-self.dx/2,self.x[-1]+self.dx/2,self.x[-1]+self.dx/2,self.x0-self.dx/2]
-        self.ylimits  = [self.y0-self.dy/2,self.y[-1]+self.dy/2,self.y[-1]+self.dy/2,self.y0-self.dy/2,self.y0-self.dy/2]
-        self.limits   = list(zip(self.xlimits,self.ylimits))
-
-
-################
-class Polygon():
-    """
-	Create a polygon manager : a class for managing a polygon as an area study delimitor.
-
-	Parameters
-	----------
-	grid : Grid()
-		Polygon() class needs a Grid() object as an argument.
-	"""
-
-    def __init__(self, grid):
-        self.polygon = None
-        self.mask    = None
-        self.grid    = grid
-
-    def set_polygon(self, vertices):
-        """
-        Create a polygon from vertices coordinates.
-
-        Parameters
-        ----------
-        vertices : string or list
-            Location of the datafile or list of the vertices coordinates.
-        """
-        if isinstance(vertices, str):
-            text         = _opendatafile(vertices)
-            self.polygon = _loadpoints(text)
-        else:
-            self.polygon = vertices
-
-        self.mask = self._set_mask()
-        return None
-
-    def _set_mask(self):
-        """
-        Set the mask.
-        """
-        mask = np.zeros((self.grid.ynum, self.grid.xnum))
-        for y in range(self.grid.ynum):
-            for x in range(self.grid.xnum):
-                mask[y][x] = not int(Path(self.polygon).contains_point((self.grid.X[y][x],self.grid.Y[y][x])))
-        return mask
-
-    def inspect_polygon(self):
-        """
-        Check if the vertices of the polygon are well located inside the grid.
-        """
-        if self.polygon is not None:
-            unvalidated_vertices = []
-            for k,(x,y) in enumerate(self.polygon):
-                if not int(Path(self.grid.limits).contains_point((x,y))):
-                    unvalidated_vertices.append(k+1)
-            validated_vertices = len(self.polygon) - len(unvalidated_vertices)
-            if validated_vertices < 3:
-                print(' inspect_polygon() - Warning : not enough vertices inside the grid limits to proceed further ({} exactly).'.format(validated_vertices))
-                print("/!\\ No polygon set /!\\")
-                self.polygon = None
-                return None
-            if len(unvalidated_vertices) > 0:
-                print('- inspect_polygon() - Warning : {} vertices not inside the grid limits on {} vertices.'.format(len(unvalidated_vertices),len(self.polygon)))
-                for vertex in unvalidated_vertices:
-                    print('- vertice {}'.format(vertex))
-                return unvalidated_vertices
-        else:
-            print('- inspect_polygon() - Error : no polygon to inspect. Please set a polygon.')
-        return None
-
-    def show(self):
-        """
-        Show the delimitation of the grid and, if a polygon is present, display its limits.
-        """
-        if self.polygon is not None:
-            closed_polygon = self.polygon[:]
-            closed_polygon.append(closed_polygon[0])
-            x,y = zip(*closed_polygon)
-
-            fig, ax = plt.subplots()
-            fig.suptitle('Show polygon', fontsize=16)
-            ax.plot(x,y, color='black')
-
-            ax.plot(self.grid.xlimits,self.grid.ylimits, color='red')
-            ax.set_aspect('equal', 'box')
-            plt.legend(('polygon','grid limits'), loc='center left', bbox_to_anchor=(1, 0.5))
-            plt.show()
-            return None
-        else:
-            print('- show_Polygon() - Error : no polygon to show.')
-            return None
-
 def _opendatafile(file_location):
     """
     Private function to simply open a file.
@@ -251,6 +114,179 @@ def _loadpoints(text):
         raise
     return points
 
+def _extents(f):
+    """
+    Little private function to correctly locate data on plots.
+    """
+    delta = f[1] - f[0]
+    return [f[0] - delta/2, f[-1] + delta/2]
+
+#####
+# 2 #
+###################################
+# pyKasso class for data modeling #
+###################################
+
+###########
+class Grid():
+    """
+    Create a grid for the simulation.
+    The calculation points are located in the center of the cells, and the origin coordinates are located at the left-bottom of the grid.
+
+    Parameters
+    ----------
+    x0 : float
+        x-coordinate origin.
+    y0 : float
+	y-coordinate origin.
+    z0 : float
+	z-coordinate origin.
+    xnum : integer
+	Number of cells on x dimension.
+    ynum : integer
+	Number of cells on y dimension.
+    znum : integer
+	Number of cells on z dimension.
+    dx : float
+	Width of a cell.
+    dy : float
+	Length of a cell.
+    dz : float
+        Height of a cell.
+
+    Notes
+    -----
+    - On this version, dx, dy and dz must be similar. pyKasso does not support unstructured grid yet.
+    - x0, y0 and z0 are considered to be in the center of the first node.
+	"""
+
+    def __init__(self, x0, y0, z0, xnum, ynum, znum, dx, dy, dz):
+        self.x0   = x0
+        self.y0   = y0
+        self.z0   = z0
+        self.xnum = xnum
+        self.ynum = ynum
+        self.znum = znum
+        self.dx   = dx
+        self.dy   = dy
+        self.dz   = dz
+
+        # Calculating the grid
+        self.x = np.arange(self.x0,self.x0+(self.xnum)*self.dx,self.dx, dtype=np.float_)
+        self.y = np.arange(self.y0,self.y0+(self.ynum)*self.dy,self.dy, dtype=np.float_)
+        self.z = np.arange(self.z0,self.z0+(self.znum)*self.dz,self.dz, dtype=np.float_)
+        self.X,self.Y,self.Z = np.meshgrid(self.x, self.y, self.z)
+
+        # Calculating the limits
+        self.xlimits = [self.x0-self.dx/2, self.x[-1]+self.dx/2]
+        self.ylimits = [self.y0-self.dy/2, self.y[-1]+self.dy/2]
+        self.zlimits = [self.z0-self.dz/2, self.z[-1]+self.dz/2]
+
+        xlimits = [self.x0-self.dx/2, self.x0-self.dx/2,    self.x[-1]+self.dx/2, self.x[-1]+self.dx/2, self.x0-self.dx/2]
+        ylimits = [self.y0-self.dy/2, self.y[-1]+self.dy/2, self.y[-1]+self.dy/2, self.y0-self.dy/2,    self.y0-self.dy/2]
+        self.limits = list(zip(xlimits, ylimits))
+
+
+################
+class Polygon():
+    """
+	Create a polygon manager : a class for managing a polygon as an area study delimitor.
+
+	Parameters
+	----------
+	grid : Grid()
+		Polygon() class needs a Grid() object as an argument.
+	"""
+
+    def __init__(self, grid):
+        self.polygon = None
+        self.mask    = None
+        self.grid    = grid
+
+    def set_polygon(self, vertices):
+        """
+        Create a polygon from vertices coordinates.
+
+        Parameters
+        ----------
+        vertices : string or list
+            Location of the datafile or list of the vertices coordinates.
+        """
+        if isinstance(vertices, str):
+            text     = _opendatafile(vertices)
+            vertices = _loadpoints(text)
+            
+        if len(vertices) < 3:
+            print(" set_polygon() - Error : Not enough vertices to create a polygon (3 minimum).")
+            return None
+        else:
+            self.polygon = vertices
+            self.mask    = self._set_mask()
+        return None
+
+    def _set_mask(self):
+        """
+        Set the mask.
+        """
+        mask = np.zeros((self.grid.ynum, self.grid.xnum))
+        for y in range(self.grid.ynum):
+            for x in range(self.grid.xnum):
+                mask[y][x] = not int(Path(self.polygon).contains_point((self.grid.X[y][x][0],self.grid.Y[y][x][0])))
+        return mask
+
+    def inspect_polygon(self):
+        """
+        Check if the vertices of the polygon are located inside the grid or not.
+        A polygon must be set.
+        
+        Returns
+        -------
+            List of vertices out of the grid.
+        """
+        if self.polygon is not None:
+            unvalidated_vertices = []
+            for k,(x,y) in enumerate(self.polygon):
+                if not int(Path(self.grid.limits).contains_point((x,y))):
+                    unvalidated_vertices.append(k+1)
+            validated_vertices = len(self.polygon) - len(unvalidated_vertices)
+            
+            if len(unvalidated_vertices) == len(self.polygon):
+                print('- inspect_polygon() - Warning : 0 vertices inside the grid limits. No polygon is set.'.format(len(unvalidated_vertices),len(self.polygon)))
+                self.polygon = None
+                self.mask    = None
+                return None
+            
+            if len(unvalidated_vertices) > 0:
+                print('- inspect_polygon() - Warning : {} vertices not inside the grid limits on {} vertices.'.format(len(unvalidated_vertices),len(self.polygon)))
+                for vertex in unvalidated_vertices:
+                    print('- vertice {}'.format(vertex))
+                return unvalidated_vertices   
+        else:
+            print('- inspect_polygon() - Error : no polygon to inspect. Please set a polygon.')
+        return None
+
+    def _show(self):
+        """
+        Show the delimitation of the grid and, if a polygon is present, display its limits.
+        """
+        if self.polygon is not None:
+            closed_polygon = self.polygon[:]
+            closed_polygon.append(closed_polygon[0])
+            x,y = zip(*closed_polygon)
+
+            fig, ax = plt.subplots()
+            fig.suptitle('Show polygon', fontsize=16)
+            ax.plot(x,y, color='black')
+
+            ax.plot(self.grid.xlimits,self.grid.ylimits, color='red')
+            ax.set_aspect('equal', 'box')
+            plt.legend(('polygon','grid limits'), loc='center left', bbox_to_anchor=(1, 0.5))
+            plt.show()
+            return None
+        else:
+            print('- show_Polygon() - Error : no polygon to show.')
+            return None
+
 
 #####################
 class PointManager():
@@ -265,7 +301,7 @@ class PointManager():
         PointManager() class needs a Polygon() object as an argument.
     """
 
-    def __init__(self, grid, polygon=None):
+    def __init__(self, grid, polygon):
         self.points  = {}
         self.grid    = grid
         self.polygon = polygon
@@ -300,8 +336,8 @@ class PointManager():
             Number of points to generate.
         """
         if self.polygon.polygon is None:
-            rand_x = [self.grid.x0 - self.grid.dx/2 + self.grid.xnum*np.random.random() * self.grid.dx for x in range(points_number)]
-            rand_y = [self.grid.y0 - self.grid.dy/2 + self.grid.ynum*np.random.random() * self.grid.dy for y in range(points_number)]
+            rand_x = [self.grid.x0 - self.grid.dx/2 + self.grid.xnum * np.random.random() * self.grid.dx for x in range(points_number)]
+            rand_y = [self.grid.y0 - self.grid.dy/2 + self.grid.ynum * np.random.random() * self.grid.dy for y in range(points_number)]
             self.points[points_key] = list(zip(rand_x,rand_y))
         else:
             validated_inlets = 0
@@ -369,20 +405,27 @@ class PointManager():
                     sys.exit()
             return None
 
-    def show(self):
+    def _show(self):
         """
         Show the delimitation of the grid, of the polygon (if present) and of the locations of the points (if present).
+        Debogage function.
+        A VIRER
         """
         fig, ax = plt.subplots()
         fig.suptitle('Show points', fontsize=16)
-        ax.plot(self.grid.xlimits,self.grid.ylimits,color='red',label='grid limits')
-
+        
+        # Grid limits
+        x,y = list(zip(*Path(self.grid.limits).to_polygons()[0]))
+        ax.plot(x,y,color='red',label='grid limits')
+        
+        # Polygon
         if self.polygon.polygon is not None:
             closed_polygon = self.polygon.polygon[:]
             closed_polygon.append(closed_polygon[0])
             x,y = zip(*closed_polygon)
             ax.plot(x,y,color='black',label='basin')
 
+        # Points
         for key in self.points:
             x,y = zip(*self.points[key])
             ax.plot(x,y,'o',label=key)
@@ -414,60 +457,115 @@ class GeologyManager():
         Parameters
         ----------
         data_key : string
-            Type of data : 'geology', 'faults' or 'fractures'.
+            Type of data : 'geology', 'faults' or 'fractures' or 'karst'.
         """
         self.data[data_key] = {}
-        self.data[data_key]['data'] = np.zeros((self.grid.ynum, self.grid.xnum))
-        self.data[data_key]['mode'] = 'null'
+        self.data[data_key]['data']  = np.zeros((self.grid.znum, self.grid.ynum, self.grid.xnum))
+        volume = self.grid.znum * self.grid.ynum * self.grid.xnum
+        self.data[data_key]['stats'] = {'ID':0, 'occurence':volume, 'frequency':1, 'volume':volume}
+        self.data[data_key]['mode']  = 'null'
         return None
 
-    def set_data(self, data_key, datafile_location, selected_var=0):
+    def set_data(self, data_key, datafile_location):
         """
-        Set data from a datafile for a indicated data key.
+        Set data from a gslib datafile.
+        The datafile must have one column.
+        For 'faults', 'fractures' and 'karst', in the gslib datafile :
+        0 - absence
+        1 - presence
 
         Parameters
         ----------
         data_key : string
-            Type of data : 'geology', 'faults' or 'fractures'.
+            Type of data : 'geology', 'faults', 'fractures' or 'karst'.
         datafile_location : string
-            Path of the datafile.
-        selected_var : integer, optionnal
-            A way to select the column which will be extracted from the datafile.
+            Path of the gslib datafile.
         """
-        self.data[data_key]         = {}
-        self.data[data_key]['data'] = self._fill(datafile_location, selected_var)
-        self.data[data_key]['mode'] = 'import'
+        self.data[data_key]          = {}
+        self.data[data_key]['data']  = self._fill(datafile_location)
+        self.data[data_key]['stats'] = self._compute_stats(data_key)
+        self.data[data_key]['mode']  = 'import'
         return None
-
-    def set_data_from_image(self, data_key, datafile_location):
+    
+    def _fill(self, datafile_location):
         """
-        Set data from an image for a indicated data key.
-
-        Parameters
-        ----------
-        data_key : string
-            Type of data : 'geology', 'faults' or 'fractures'.
-        datafile_location : string
-            Path of the datafile.
+        GSLIB Reader.
         """
+        # Try to open datafile
+        text = _opendatafile(datafile_location)
+
+        # Control if second line is well an integer
         try:
-           image_data = np.flipud(plt.imread(datafile_location))
+            nvar = int(text[1])
         except:
-            print('- set_data_from_image() - Error : unable to read datafile.')
+            print("- set_data() - Error : Second line of gslib file must be an integer.")
             raise
-        self.data[data_key] = {}
-        self.data[data_key]['data'] = (image_data[:,:,0] == 0)*1
-        self.data[data_key]['mode'] = 'image'
-        return None
+            
+        # Control if second line is 1
+        if nvar is not 1:
+           sys.exit("- set_data() - Error : gslib file must have only one column.")
 
-    def generate_fractures(self, fractures_numbers, fractures_min_orientation, fractures_max_orientation, alpha, fractures_min_length, fractures_max_length):
+        # Control if size declared match with gslib's size file
+        data_lines = text[2+nvar:]
+        if len(data_lines) != (self.grid.xnum*self.grid.ynum*self.grid.znum):
+            sys.exit("- set_data() - Error : Dimensions declared does not match with gslib file's size.")
+
+        # Get values from text files
+        data = np.zeros(len(data_lines))
+        try:
+            for data_line, k in zip(data_lines, range(len(data_lines))):
+                data[k] = data_line.strip().split()[0]
+        except:
+            print("- set_data() - Unexpected error:", sys.exc_info()[0])
+            raise
+
+        return data.reshape((self.grid.znum, self.grid.ynum, self.grid.xnum))
+
+    def _compute_stats(self, data_key):
+        """
+        Compute statistics on the imported data.
+        """
+        stats = {}
+
+        # Count occurencies
+        for z in range(self.grid.znum):
+            for y in range(self.grid.ynum):
+                for x in range(self.grid.xnum):
+                    value = self.data[data_key]['data'][z][y][x]
+                    try:
+                        if stats.get(value) == None:
+                            stats[value] = 1
+                        else:
+                            stats[value] += 1
+                    except:
+                        print(value)
+
+        # Construct stats
+        ID        = []
+        occurence = []
+        frequency = []
+        volume    = []
+        for k in stats:
+            ID.append(k)
+            occurence.append(stats[k])
+            frequency.append(100*stats[k]/(self.grid.xnum*self.grid.ynum*self.grid.znum))
+            volume.append(stats[k]*self.grid.dx*self.grid.dy*self.grid.dz)
+        return {'ID':ID, 'occurence':occurence, 'frequency':frequency, 'volume':volume}
+
+    def generate_fractures(self, fractures_densities, fractures_min_orientation, fractures_max_orientation, alpha, fractures_min_length, fractures_max_length):
+        if self.grid.znum == 1:
+            self.generate_2D_fractures(fractures_densities, fractures_min_orientation, fractures_max_orientation, alpha, fractures_min_length, fractures_max_length)
+        else:
+            self.generate_3D_fractures()
+
+    def generate_2D_fractures(self, fractures_densities, fractures_min_orientation, fractures_max_orientation, alpha, fractures_min_length, fractures_max_length):
         """
         Generate fractures.
 
         Parameters
         ----------
-        fractures_numbers : list
-            Fractures number for each fracture family.
+        fractures_densities : list
+            Fracture densities for each fracture family.
         fractures_min_orientation : list
             Fractures minimum orientation for each fracture family.
         fractures_max_orientation : list
@@ -480,16 +578,41 @@ class GeologyManager():
             The maximum lenght of the fractures. For all the families.
         """
         self.data['fractures'] = {}
-        self.data['fractures']['data'] = np.zeros((self.grid.ynum, self.grid.xnum))
+        self.data['fractures']['data'] = np.zeros((self.grid.ynum, self.grid.xnum, self.grid.znum))
 
         self.fractures = {}
         fracture_id = 0
 
-        for frac_family in range(len(fractures_numbers)):
+        # Redefine fracturation domain 
+        lenmax = max( fractures_max_length )
+
+        xd0, xd1, yd0, yd1 = self.grid.xlimits[0], self.grid.xlimits[1], self.grid.ylimits[0], self.grid.ylimits[1]
+        Lx, Ly = xd1-xd0, yd1-yd0
+
+        shiftx = min(Lx/2,lenmax/2)
+        shifty = min(Ly/2,lenmax/2)
+        Lex = 2 * shiftx + Lx
+        Ley = 2 * shifty + Ly
+        
+        area = Lex * Ley
+        xmin = self.grid.xlimits[0] - shiftx
+        ymin = self.grid.ylimits[0] - shifty
+
+        # Numbers of fractures
+        fractures_numbers = np.array(fractures_densities) * area
+
+        for frac_family in range(len(fractures_densities)):
             fracs = []
+        
+            # Define all the constants required to randomly draw the length in distribution
+            palpha = (1-alpha[frac_family])
+            invpalpha = 1/palpha
+            fmina = fractures_min_length[frac_family]**palpha
+            frangea = fractures_max_length[frac_family]**palpha - fmina
+
+            # Define all the constants required for the orientation distribution 
             min_angle = fractures_min_orientation[frac_family]
             max_angle = fractures_max_orientation[frac_family]
-
             if min_angle > max_angle:
                 min_angle = min_angle - 360
 
@@ -498,42 +621,82 @@ class GeologyManager():
             mean_angle = math.radians(mean_angle)
             std_angle  = math.radians(std_angle)
 
+            # Computes the kappa value for the Von Mises orientation distribution
             func  = lambda k : std_angle**2 - 1 + mpmath.besseli(1,k) / mpmath.besseli(0,k)
             kappa = mpmath.findroot(func,1)
 
             # Generate poisson number for each fracture family
             real_frac_number = np.random.poisson(fractures_numbers[frac_family])
 
+            # Loop over the individual fractures
             for i in range(1, real_frac_number+1):
-                # FRACTURE CENTER LOCATION
-                # -> from double uniform distribution
-                frac_x_start = self.grid.x0 - self.grid.dx/2 + np.random.random() * self.grid.xnum * self.grid.dx
-                frac_y_start = self.grid.y0 - self.grid.dy/2 + np.random.random() * self.grid.ynum * self.grid.dy
+                
+                # FRACTURE CENTER LOCATION from double uniform distribution
+                xm = xmin + np.random.random() * Lex
+                ym = ymin + np.random.random() * Ley
 
-                # FRACTURE LENGHT
-                # -> from power law distribution
-                # x   = np.arange(min_fracture_length,max_fracture_length,0.01)
-                # C = 1 - np.float_power(max_fracture_length, -alpha+1) / np.float_power(min_fracture_length, -alpha+1)
-                # pdf = ((alpha - 1)/min_fracture_length) * np.float_power(x / min_fracture_length, -alpha) / C
-                # cdf = (np.float_power(min_fracture_length, -alpha+1) - np.float_power(x, -alpha+1)) / (np.float_power(min_fracture_length, -alpha+1) - np.float_power(max_fracture_length, -alpha+1))
-                # cdf_reverse = np.float_power( np.float_power(min_fracture_length, -alpha+1) - P(x) * (np.float_power(min_fracture_length, -alpha+1) - np.float_power(max_fracture_length, -alpha+1)) , (1/(-alpha+1)))
-                frac_length = np.float_power(np.float_power(fractures_min_length[frac_family], -alpha+1) - np.random.rand() * (np.float_power(fractures_min_length[frac_family], -alpha+1) - np.float_power(fractures_max_length[frac_family], -alpha+1)) , (1/(-alpha+1)))
-                # FRACTURE ORIENTATION
-                # -> from von Mises distribution
-                mu = mean_angle
-                frac_orientation = math.degrees(np.random.vonmises(mu, kappa))
-                if frac_orientation < 0:
-                    frac_orientation += 360
+                # FRACTURE LENGHT from truncated power law distribution
+                u = np.random.rand()        
+                frac_length = ( fmina + u * frangea )**invpalpha
+                mid_length = frac_length / 2
+                
+                # FRACTURE ORIENTATION from von Mises distribution
+                frac_orientation =  np.random.vonmises(mean_angle, kappa)
+                sinor = np.sin( frac_orientation )
+                cosor = np.cos( frac_orientation )
 
-                # Create fracture object
-                fracs.append(Fracture(fracture_id, frac_family, frac_x_start, frac_y_start, frac_length, frac_orientation))
-                fracture_id += 1
+                # Extremities 
+                dx1 = mid_length * sinor 
+                dy1 = mid_length * cosor
+                dx2, dy2 = -dx1, -dy1                
+                
+                x1, y1, x2, y2 = xm+dx1, ym+dy1, xm+dx2, ym+dy2
+
+                # This part allows to crop all fractures generated outside the domain
+                # We swap the point to ensure that point 1 as the lowest x
+                if x2 < x1 :
+                    x1, x2 = x2, x1
+                    y1, y2 = y2, y1
+                
+                # Slope of fracture
+                a = (y1-y2)/(x1-x2)
+                
+                # We initialize a flag to detect if fracture is whithin the domain
+                flagin = True
+                
+                # Truncation along the x axis
+                if x1>xd1 or x2<xd0 : 
+                    flagin = False                      
+                else:
+                    if x1<xd0 :
+                        x1, y1 = xd0, a*(xd0-x1) + y1   
+                    if x2 > xd1 :
+                        x2, y2 = xd1, a*(xd1-x1) + y1
+
+                # Vertical swap: we want y2>y1
+                if y2 < y1 :
+                    x1, x2 = x2, x1
+                    y1, y2 = y2, y1
+
+                # Truncation along the y axis
+                if y2<yd0 or y1 > yd1 :
+                    flagin = False
+                else :
+                    if y1 < yd0 :
+                        x1, y1 = (yd0-y1)/a + x1, yd0
+                    if y2 > yd1 :
+                        x2, y2 = (yd1-y1)/a + x1, yd1
+                        
+                # We keep only the fractures within the domain
+                if flagin:    
+                    fracs.append(Fracture(fracture_id, frac_family, [x1, y1, x2, y2], frac_length, frac_orientation))
+                    fracture_id += 1
 
             # Complete fractures dictionary
             self.fractures[frac_family] = {'frac_nbr' : real_frac_number, 'fractures' : fracs}
 
         # Draw fractures maps
-        self._generate_fractures_maps()
+        # self._generate_fractures_maps()
         return None
 
     def _generate_fractures_maps(self):
@@ -573,128 +736,64 @@ class GeologyManager():
         self.data['fractures']['mode'] = 'generate'
         return None
 
-    def _fill(self, datafile_location, selected_var=0):
-        # Try to open datafile
-        text = _opendatafile(datafile_location)
+    def generate_3D_fractures(self):
+        sys.exit("no such function yet")
 
-        # Control if second line is well an integer
-        try:
-            nvar = int(text[1])
-        except:
-            print("- set_data() - Error : Second line of gslib's file must be an integer.")
-            raise
-
-        # Control if size declared match with gslib's size file
-        data_lines = text[2+nvar:]
-        if len(data_lines) != (self.grid.xnum*self.grid.ynum):
-            print("- set_data() - Error : Dimensions declared does not match with gslib's dimensions file.")
-            return None
-
-        # Get variables names
-        dataTitles = [var_name.strip() for var_name in text[2:2+nvar]]
-        #print("Data variables's name : ", self.dataTitles)
-        if selected_var > len(dataTitles):
-            print("- set_data() - Error : Selected variable doesn't exist.")
-            return None
-
-        # Get values from text files
-        data = np.zeros((len(data_lines), nvar))
-        try:
-            for data_line, k in zip(data_lines, range(len(data_lines))):
-                data[k] = data_line.strip().split()
-        except ValueError:
-            print("- set_data() - Error : Dimensions of data frame does not match with number of variables. Missing values or values in excess.")
-            raise
-        except:
-            print("- set_data() - Unexpected error:", sys.exc_info()[0])
-            raise
-
-        # Put values in x,y matrice
-        maps = np.zeros((nvar,self.grid.ynum,self.grid.xnum))
-        for var in range(nvar):
-            k = 0
-            for y in range(self.grid.ynum):
-                for x in range(self.grid.xnum):
-                    maps[var,y,x] = data[k,var]
-                    k += 1
-
-        return maps[selected_var]
-
-    def compute_stats_on_data(self):
-        """
-        Compute statistics on the geologic data.
-        """
-        for key in self.data:
-            stats = {}
-            for y in range(self.grid.ynum):
-                for x in range(self.grid.xnum):
-                    value = self.data[key]['data'][y][x]
-                    try:
-                        if stats.get(value) == None:
-                            stats[value] = 1
-                        else:
-                            stats[value] += 1
-                    except:
-                        print(value)
-
-            #if verbose:
-             #   print('\n')
-              #  print('STATS for {}'.format(key))
-               # print('%-12s%-12s%-12s%-12s' % ('ID', 'Number', '%', 'Superficy'))
-                #print(48*'-')
-            ID        = []
-            occurence = []
-            frequency = []
-            superficy = []
-            for k in stats:
-                #if verbose:
-                 #   print('%-12i%-12i%-12f%-12i' % (k, stats[k], 100*stats[k]/(self.grid.xnum*self.grid.ynum), stats[k]*self.grid.dx*self.grid.dy))
-                ID.append(k)
-                occurence.append(stats[k])
-                frequency.append(100*stats[k]/(self.grid.xnum*self.grid.ynum))
-                superficy.append(stats[k]*self.grid.dx*self.grid.dy)
-            self.data[key]['stats'] = {'ID':ID, 'occurence':occurence, 'frequency':frequency, 'superficy':superficy}
-        return None
-
-## ??
-#    def get_stats(self):
-#        stats = {}
-#        for key in self.data:
-#            stats[key] = self.data[key]['stats']
-#        return stats
+    def show_fractures(self):
+        for frac_family in self.fractures:
+            for frac in self.fractures[frac_family]["fractures"]:
+                x0 = frac.position[0]
+                y0 = frac.position[1]
+                x1 = frac.position[2]
+                y1 = frac.position[3]
+                plt.plot([x0, x1], [y0, y1] ,'orange')
+        plt.show()
 
     def show(self, frac_family=None):
         """
-        Show the geology, faults and fractures maps.
+        Show the geology, faults, fractures and initial karst network maps.
         """
-        fig, (ax1,ax2,ax3) = plt.subplots(1,3,sharex=True,sharey=True)
-        fig.suptitle('Data', fontsize=16)
+        grid = self._get_pyvista_grid()
+        grid.cell_arrays["values"] = self.data["geology"]["data"].flatten(order="F")
+        
+        p = pv.Plotter(shape=(2, 2))
 
-        try:
-            im1 = ax1.imshow(self.data['geology']['data'], extent=_extents(self.grid.x) + _extents(self.grid.y), origin='lower')
-        except:
-            im1 = []
-        ax1.set_title('Geology')
+        p.subplot(0, 0)
+        p.add_text("Geology", font_size=30)
+        p.add_mesh(grid)
 
-        try:
-            im2 = ax2.imshow(self.data['faults']['data'], extent=_extents(self.grid.x) + _extents(self.grid.y), origin='lower')
-        except:
-            im2 = []
-        ax2.set_title('Faults')
+        p.subplot(0, 1)
+        p.add_text("Faults", font_size=30)
+        p.add_mesh(pv.Cube(), show_edges=True, color="tan")
 
-        try:
-            if frac_family is None:
-                data = self.data['fractures']['data']
-            else:
-                data = self.fractures[frac_family]['frac_map']
-            im3 = ax3.imshow(data, extent=_extents(self.grid.x) + _extents(self.grid.y), origin='lower')
-        except:
-            im3 = []
-        ax3.set_title('Fractures')
+        p.subplot(1, 0)
+        p.add_text("Fractures", font_size=30)
+        sphere = pv.Sphere()
+        p.add_mesh(sphere, scalars=sphere.points[:, 2])
+        p.add_scalar_bar("Z")
+        # plotter.add_axes()
+        p.add_axes(interactive=True)
 
-        fig.subplots_adjust(hspace=0.5)
-        plt.show()
-        return None
+        p.subplot(1, 1)
+        p.add_text("Karst network", font_size=30)
+        p.add_mesh(pv.Cone(), color="g", show_edges=True)
+        p.show_bounds(all_edges=True)
+
+        # Display the window
+        p.show()
+    
+    def _get_pyvista_grid(self):
+        """
+        Produce the pyvista grid.
+        """
+        values = self.data["geology"]["data"]
+        grid = pv.UniformGrid()
+        # Set the grid dimensions: shape + 1 because we want to inject our values on the CELL data
+        grid.dimensions = np.array(values.shape) + 1
+        # Edit the spatial reference
+        grid.origin  = (self.grid.x0-self.grid.dx/2, self.grid.y0-self.grid.dy/2, self.grid.z0-self.grid.dz/2)
+        grid.spacing = (self.grid.dx, self.grid.dy, self.grid.dz)
+        return grid
 
 def _extents(f):
     """
@@ -715,44 +814,24 @@ class Fracture():
         Fracture id
     family : integer
         Fracture family id
-    x_start : float
-        x-coordinate of the center of the fracture
-    y_start : flaot
-        y-coordinate of the center of the fracture
+    position : list
+        [x0, y0, x1, y1]
     length : float
         Length of the fracture
     orientation : float
         Orientation of the fracture
     """
 
-    def __init__(self, ID, family, x_start, y_start, length, orientation):
+    def __init__(self, ID, family, position, length, orientation):
 
-        self.ID           = ID
-        self.family       = family
-        self.x_start      = x_start
-        self.y_start      = y_start
-        self.length       = length
-        self.orientation  = orientation
-        self.coordinates  = []
-        self.coordinates.append(np.array((x_start,y_start)))
+        self.ID          = ID
+        self.family      = family
+        self.position    = position
+        self.length      = length
+        self.orientation = orientation
 
     def __repr__(self):
-        return '[id:{}, x:{}, y:{}, len:{}, or.:{}] \n'.format(self.ID, round(self.x_start,2), round(self.y_start,2), round(self.length,2), round(self.orientation,2))
-
-    def compute_segment_points(self, dx):
-        """
-        Compute the coordinates of the points of the segment.
-        """
-        mid_length = self.length / 2
-        self.growth_rate_x = abs(math.sin(self.orientation*math.pi/180) * dx) #/ 2
-        self.growth_rate_y = abs(math.cos(self.orientation*math.pi/180) * dx) #/ 2
-        dx_point1 = mid_length * math.sin(self.orientation*math.pi/180)
-        dy_point1 = mid_length * math.cos(self.orientation*math.pi/180)
-        dx_point2 = -mid_length * math.sin(self.orientation*math.pi/180)
-        dy_point2 = -mid_length * math.cos(self.orientation*math.pi/180)
-        self.coordinates.append(self.coordinates[0] + np.array((dx_point1,dy_point1)))
-        self.coordinates.append(self.coordinates[0] + np.array((dx_point2,dy_point2)))
-        return None
+        return '[id:{}, x0:{}, y0:{}, x1:{}, y1:{}, len:{}, or.:{}] \n'.format(self.ID, round(self.position[0],2), round(self.position[1],2), round(self.position[2],2), round(self.position[3],2), round(self.length,2), round(self.orientation,2))
 
 
 #####
@@ -823,17 +902,26 @@ class SKS():
     def get_y0(self):
         return self.settings['y0']
 
+    def get_z0(self):
+        return self.settings['z0']
+
     def get_xnum(self):
         return self.settings['xnum']
 
     def get_ynum(self):
         return self.settings['ynum']
 
+    def get_znum(self):
+        return self.settings['znum']
+
     def get_dx(self):
         return self.settings['dx']
 
     def get_dy(self):
         return self.settings['dy']
+
+    def get_dz(self):
+        return self.settings['dz']
 
     def get_data_has_polygon(self):
         return self.settings['data_has_polygon']
@@ -1545,7 +1633,11 @@ class SKS():
         Initialize all the data.
         """
         # The grid
-        self.grid    = self._set_grid(self.settings['x0'],self.settings['y0'],self.settings['xnum'],self.settings['ynum'],self.settings['dx'],self.settings['dy'])
+        self.grid    = self._set_grid(
+            self.settings['x0'], self.settings['y0'], self.settings['z0'],
+            self.settings['xnum'], self.settings['ynum'], self.settings['znum'],
+            self.settings['dx'], self.settings['dy'], self.settings['dz']
+        )
         # The polygon and his mask
         self.polygon = self._set_polygon(self.grid)
         self.mask    = self.polygon.mask
@@ -1565,11 +1657,11 @@ class SKS():
 
         return None
 
-    def _set_grid(self, x0, y0, xnum, ynum, dx, dy):
+    def _set_grid(self, x0, y0, z0, xnum, ynum, znum, dx, dy, dz):
         """
         Set the grid object.
         """
-        grid = Grid(x0, y0, xnum, ynum, dx, dy)
+        grid = Grid(x0, y0, z0, xnum, ynum, znum, dx, dy, dz)
         return grid
 
     def _set_polygon(self, grid):

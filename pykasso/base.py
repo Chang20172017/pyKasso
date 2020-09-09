@@ -301,10 +301,11 @@ class PointManager():
         PointManager() class needs a Polygon() object as an argument.
     """
 
-    def __init__(self, grid, polygon):
+    def __init__(self, grid, polygon, geology):
         self.points  = {}
         self.grid    = grid
         self.polygon = polygon
+        self.geology = geology
 
     def set_points(self, points_key, points):
         """
@@ -324,7 +325,7 @@ class PointManager():
             self.points[points_key] = points
         return None
 
-    def generate_points(self, points_key, points_number):
+    def generate_points(self, points_key, points_number, geological_IDs=None):
         """
         Generate random points on the grid, according to the parameters.
 
@@ -335,22 +336,51 @@ class PointManager():
         points_number : integer
             Number of points to generate.
         """
-        if self.polygon.polygon is None:
-            rand_x = [self.grid.x0 - self.grid.dx/2 + self.grid.xnum * np.random.random() * self.grid.dx for x in range(points_number)]
-            rand_y = [self.grid.y0 - self.grid.dy/2 + self.grid.ynum * np.random.random() * self.grid.dy for y in range(points_number)]
-            self.points[points_key] = list(zip(rand_x,rand_y))
+        get_X = lambda x : int(math.ceil((x - self.grid.x0 - self.grid.dx/2) / self.grid.dx))
+        get_Y = lambda y : int(math.ceil((y - self.grid.y0 - self.grid.dy/2) / self.grid.dy))
+        
+        if geological_IDs is None:
+            if self.polygon.polygon is None:
+                rand_x = [self.grid.x0 - self.grid.dx/2 + self.grid.xnum * np.random.random() * self.grid.dx for x in range(points_number)]
+                rand_y = [self.grid.y0 - self.grid.dy/2 + self.grid.ynum * np.random.random() * self.grid.dy for y in range(points_number)]
+                self.points[points_key] = list(zip(rand_x,rand_y))
+            else:
+                validated_inlets = 0
+                rand_x = []
+                rand_y = []
+                while validated_inlets < points_number:
+                    x = self.grid.x0 - self.grid.dx/2 + self.grid.xnum*np.random.random() * self.grid.dx
+                    y = self.grid.y0 - self.grid.dy/2 + self.grid.ynum*np.random.random() * self.grid.dy
+                    if int(Path(self.polygon.polygon).contains_point((x,y))):
+                        rand_x.append(x)
+                        rand_y.append(y)
+                        validated_inlets += 1
+                self.points[points_key] = list(zip(rand_x,rand_y))
+        # Case when geological_IDs is indicated
         else:
             validated_inlets = 0
             rand_x = []
             rand_y = []
-            while validated_inlets < points_number:
-                x = self.grid.x0 - self.grid.dx/2 + self.grid.xnum*np.random.random() * self.grid.dx
-                y = self.grid.y0 - self.grid.dy/2 + self.grid.ynum*np.random.random() * self.grid.dy
-                if int(Path(self.polygon.polygon).contains_point((x,y))):
-                    rand_x.append(x)
-                    rand_y.append(y)
-                    validated_inlets += 1
-            self.points[points_key] = list(zip(rand_x,rand_y))
+            # Without polygon
+            if self.polygon.polygon is None:
+                while validated_inlets < points_number:
+                    x = self.grid.x0 - self.grid.dx/2 + self.grid.xnum*np.random.random() * self.grid.dx
+                    y = self.grid.y0 - self.grid.dy/2 + self.grid.ynum*np.random.random() * self.grid.dy
+                    if self.geology.surface_IDs[get_Y(y)][get_X(x)] in geological_IDs:
+                        rand_x.append(x)
+                        rand_y.append(y)
+                        validated_inlets += 1
+                self.points[points_key] = list(zip(rand_x,rand_y))
+            # With polygon
+            else:
+                while validated_inlets < points_number:
+                    x = self.grid.x0 - self.grid.dx/2 + self.grid.xnum*np.random.random() * self.grid.dx
+                    y = self.grid.y0 - self.grid.dy/2 + self.grid.ynum*np.random.random() * self.grid.dy
+                    if (self.geology.surface_IDs[get_Y(y)][get_X(x)] in geological_IDs) and int(Path(self.polygon.polygon).contains_point((x,y))):
+                        rand_x.append(x)
+                        rand_y.append(y)
+                        validated_inlets += 1
+                self.points[points_key] = list(zip(rand_x,rand_y))
         return None
 
     def composite_points(self, points_key, points, points_number):
@@ -408,8 +438,6 @@ class PointManager():
     def _show(self):
         """
         Show the delimitation of the grid, of the polygon (if present) and of the locations of the points (if present).
-        Debogage function.
-        A VIRER
         """
         fig, ax = plt.subplots()
         fig.suptitle('Show points', fontsize=16)
@@ -461,8 +489,9 @@ class GeologyManager():
         """
         self.data[data_key] = {}
         self.data[data_key]['data']  = np.zeros((self.grid.znum, self.grid.ynum, self.grid.xnum))
-        volume = self.grid.znum * self.grid.ynum * self.grid.xnum
-        self.data[data_key]['stats'] = {'ID':0, 'occurence':volume, 'frequency':1, 'volume':volume}
+        occurence = self.grid.znum * self.grid.ynum * self.grid.xnum
+        volume    = occurence * self.grid.dx * self.grid.dy * self.grid.dz
+        self.data[data_key]['stats'] = {'ID':0, 'occurence':occurence, 'frequency':1, 'volume':volume}
         self.data[data_key]['mode']  = 'null'
         return None
 
@@ -551,6 +580,37 @@ class GeologyManager():
             frequency.append(100*stats[k]/(self.grid.xnum*self.grid.ynum*self.grid.znum))
             volume.append(stats[k]*self.grid.dx*self.grid.dy*self.grid.dz)
         return {'ID':ID, 'occurence':occurence, 'frequency':frequency, 'volume':volume}
+
+    def _check_geological_IDs(self, IDs):
+        for ID in IDs:
+            if ID not in self.data["geology"]["stats"]["ID"]:
+                sys.exit("Detected geological IDs do not match which indicated ones.")
+        self.geological_IDs = IDs
+        return None
+
+    def _compute_surface(self):
+        """
+        Compute the surface IDs and the digital elevation model.
+        """
+        if self.data["geology"]["mode"] is "null":
+            self.DEM         = np.full((self.grid.ynum, self.grid.xnum), self.grid.znum * self.grid.dz)
+            self.surface_IDs = np.full((self.grid.ynum, self.grid.xnum), 0)
+        elif self.data["geology"]["mode"] is "import":
+            self.DEM         = np.zeros((self.grid.ynum,self.grid.xnum))
+            self.surface_IDs = np.zeros((self.grid.ynum,self.grid.xnum))
+            for y in range(self.grid.ynum):
+                for x in range(self.grid.xnum):
+                    for z in range(self.grid.znum):
+                        if self.data["geology"]["data"][z][y][x] == self.geological_IDs[0]:
+                            if z == 0:
+                                self.surface_IDs[y][x] = self.geological_IDs[0]
+                                break
+                        else:
+                            self.DEM[y][x] = z + 1
+                            self.surface_IDs[y][x] = self.data["geology"]["data"][z][y][x]
+            self.DEM = self.DEM * self.grid.dz + self.grid.z0
+        return None
+                
 
     def generate_fractures(self, fractures_densities, fractures_min_orientation, fractures_max_orientation, alpha, fractures_min_length, fractures_max_length):
         if self.grid.znum == 1:

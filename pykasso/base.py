@@ -18,11 +18,11 @@ import math
 # Dependencies
 import yaml
 import mpmath
-import numpy    as np 
+import numpy    as np
 import numpy.ma as ma
 import pandas   as pd
-import skfmm  
-import karstnet as kn 
+import skfmm
+import karstnet as kn
 import matplotlib.pyplot as plt
 from   matplotlib.path import Path
 from matplotlib.patches import Rectangle
@@ -215,7 +215,7 @@ class Polygon():
         if isinstance(vertices, str):
             text     = _opendatafile(vertices)
             vertices = _loadpoints(text)
-            
+
         if len(vertices) < 3:
             print(" set_polygon() - Error : Not enough vertices to create a polygon (3 minimum).")
             return None
@@ -238,7 +238,7 @@ class Polygon():
         """
         Check if the vertices of the polygon are located inside the grid or not.
         A polygon must be set.
-        
+
         Returns
         -------
             List of vertices out of the grid.
@@ -249,18 +249,18 @@ class Polygon():
                 if not int(Path(self.grid.limits).contains_point((x,y))):
                     unvalidated_vertices.append(k+1)
             validated_vertices = len(self.polygon) - len(unvalidated_vertices)
-            
+
             if len(unvalidated_vertices) == len(self.polygon):
                 print('- inspect_polygon() - Warning : 0 vertices inside the grid limits. No polygon is set.'.format(len(unvalidated_vertices),len(self.polygon)))
                 self.polygon = None
                 self.mask    = None
                 return None
-            
+
             if len(unvalidated_vertices) > 0:
                 print('- inspect_polygon() - Warning : {} vertices not inside the grid limits on {} vertices.'.format(len(unvalidated_vertices),len(self.polygon)))
                 for vertex in unvalidated_vertices:
                     print('- vertice {}'.format(vertex))
-                return unvalidated_vertices   
+                return unvalidated_vertices
         else:
             print('- inspect_polygon() - Error : no polygon to inspect. Please set a polygon.')
         return None
@@ -338,7 +338,10 @@ class PointManager():
         """
         get_X = lambda x : int(math.ceil((x - self.grid.x0 - self.grid.dx/2) / self.grid.dx))
         get_Y = lambda y : int(math.ceil((y - self.grid.y0 - self.grid.dy/2) / self.grid.dy))
-        
+
+        if self.geology.data["geology"]["mode"] is "null":
+            geological_IDs=None
+
         if geological_IDs is None:
             if self.polygon.polygon is None:
                 rand_x = [self.grid.x0 - self.grid.dx/2 + self.grid.xnum * np.random.random() * self.grid.dx for x in range(points_number)]
@@ -441,11 +444,11 @@ class PointManager():
         """
         fig, ax = plt.subplots()
         fig.suptitle('Show points', fontsize=16)
-        
+
         # Grid limits
         x,y = list(zip(*Path(self.grid.limits).to_polygons()[0]))
         ax.plot(x,y,color='red',label='grid limits')
-        
+
         # Polygon
         if self.polygon.polygon is not None:
             closed_polygon = self.polygon.polygon[:]
@@ -515,7 +518,7 @@ class GeologyManager():
         self.data[data_key]['stats'] = self._compute_stats(data_key)
         self.data[data_key]['mode']  = 'import'
         return None
-    
+
     def _fill(self, datafile_location):
         """
         GSLIB Reader.
@@ -529,7 +532,7 @@ class GeologyManager():
         except:
             print("- set_data() - Error : Second line of gslib file must be an integer.")
             raise
-            
+
         # Control if second line is 1
         if nvar is not 1:
            sys.exit("- set_data() - Error : gslib file must have only one column.")
@@ -610,7 +613,6 @@ class GeologyManager():
                             self.surface_IDs[y][x] = self.data["geology"]["data"][z][y][x]
             self.DEM = self.DEM * self.grid.dz + self.grid.z0
         return None
-                
 
     def generate_fractures(self, fractures_densities, fractures_min_orientation, fractures_max_orientation, alpha, fractures_min_length, fractures_max_length):
         if self.grid.znum == 1:
@@ -643,7 +645,7 @@ class GeologyManager():
         self.fractures = {}
         fracture_id = 0
 
-        # Redefine fracturation domain 
+        # Redefine fracturation domain
         lenmax = max( fractures_max_length )
 
         xd0, xd1, yd0, yd1 = self.grid.xlimits[0], self.grid.xlimits[1], self.grid.ylimits[0], self.grid.ylimits[1]
@@ -653,7 +655,7 @@ class GeologyManager():
         shifty = min(Ly/2,lenmax/2)
         Lex = 2 * shiftx + Lx
         Ley = 2 * shifty + Ly
-        
+
         area = Lex * Ley
         xmin = self.grid.xlimits[0] - shiftx
         ymin = self.grid.ylimits[0] - shifty
@@ -663,14 +665,14 @@ class GeologyManager():
 
         for frac_family in range(len(fractures_densities)):
             fracs = []
-        
+
             # Define all the constants required to randomly draw the length in distribution
             palpha = (1-alpha[frac_family])
             invpalpha = 1/palpha
             fmina = fractures_min_length[frac_family]**palpha
             frangea = fractures_max_length[frac_family]**palpha - fmina
 
-            # Define all the constants required for the orientation distribution 
+            # Define all the constants required for the orientation distribution
             min_angle = fractures_min_orientation[frac_family]
             max_angle = fractures_max_orientation[frac_family]
             if min_angle > max_angle:
@@ -690,26 +692,26 @@ class GeologyManager():
 
             # Loop over the individual fractures
             for i in range(1, real_frac_number+1):
-                
+
                 # FRACTURE CENTER LOCATION from double uniform distribution
                 xm = xmin + np.random.random() * Lex
                 ym = ymin + np.random.random() * Ley
 
                 # FRACTURE LENGHT from truncated power law distribution
-                u = np.random.rand()        
+                u = np.random.rand()
                 frac_length = ( fmina + u * frangea )**invpalpha
                 mid_length = frac_length / 2
-                
+
                 # FRACTURE ORIENTATION from von Mises distribution
                 frac_orientation =  np.random.vonmises(mean_angle, kappa)
                 sinor = np.sin( frac_orientation )
                 cosor = np.cos( frac_orientation )
 
-                # Extremities 
-                dx1 = mid_length * sinor 
+                # Extremities
+                dx1 = mid_length * sinor
                 dy1 = mid_length * cosor
-                dx2, dy2 = -dx1, -dy1                
-                
+                dx2, dy2 = -dx1, -dy1
+
                 x1, y1, x2, y2 = xm+dx1, ym+dy1, xm+dx2, ym+dy2
 
                 # This part allows to crop all fractures generated outside the domain
@@ -717,19 +719,19 @@ class GeologyManager():
                 if x2 < x1 :
                     x1, x2 = x2, x1
                     y1, y2 = y2, y1
-                
+
                 # Slope of fracture
                 a = (y1-y2)/(x1-x2)
-                
+
                 # We initialize a flag to detect if fracture is whithin the domain
                 flagin = True
-                
+
                 # Truncation along the x axis
-                if x1>xd1 or x2<xd0 : 
-                    flagin = False                      
+                if x1>xd1 or x2<xd0 :
+                    flagin = False
                 else:
                     if x1<xd0 :
-                        x1, y1 = xd0, a*(xd0-x1) + y1   
+                        x1, y1 = xd0, a*(xd0-x1) + y1
                     if x2 > xd1 :
                         x2, y2 = xd1, a*(xd1-x1) + y1
 
@@ -746,9 +748,9 @@ class GeologyManager():
                         x1, y1 = (yd0-y1)/a + x1, yd0
                     if y2 > yd1 :
                         x2, y2 = (yd1-y1)/a + x1, yd1
-                        
+
                 # We keep only the fractures within the domain
-                if flagin:    
+                if flagin:
                     fracs.append(Fracture(fracture_id, frac_family, [x1, y1, x2, y2], frac_length, frac_orientation))
                     fracture_id += 1
 
@@ -756,42 +758,30 @@ class GeologyManager():
             self.fractures[frac_family] = {'frac_nbr' : real_frac_number, 'fractures' : fracs}
 
         # Draw fractures maps
-        # self._generate_fractures_maps()
+        self._generate_fractures_maps()
         return None
 
     def _generate_fractures_maps(self):
+        """
+        Draw the fractures map according to generated fracturation.
+        """
         fractures_maps = np.zeros((len(self.fractures)+1,self.grid.ynum,self.grid.xnum))
 
-        # For each family, compute segment points and draw a map
         for frac_family in self.fractures:
-            fractures = self.fractures[frac_family]['fractures']
-            [fracture.compute_segment_points(self.grid.dx) for fracture in fractures]
+            for fracture in self.fractures[frac_family]["fractures"]:
+                x0, y0, x1, y1 = fracture.position
+                d = np.sqrt((x1-x0)**2 + (y1-y0)**2)
+                D = np.sqrt((self.grid.dx/2)**2 + (self.grid.dy/2)**2)
+                n = int(d / D)
+                xs = np.linspace(x0, x1, n)
+                ys = np.linspace(y0, y1, n)
 
-            for fracture in fractures:
-                x1,y1 = fracture.coordinates[1]
-                x2,y2 = fracture.coordinates[2]
-                x,y   = (x1,y1)
-
-                if x1 - x2 > 0:
-                    fracture.growth_rate_x *= -1
-                if y1 - y2 > 0:
-                    fracture.growth_rate_y *= -1
-
-                X  = int(math.ceil((x1 - self.grid.x0 - self.grid.dx/2) / self.grid.dx))
-                Y  = int(math.ceil((y1 - self.grid.y0 - self.grid.dy/2) / self.grid.dy))
-                X2 = int(math.ceil((x2 - self.grid.x0 - self.grid.dx/2) / self.grid.dx))
-                Y2 = int(math.ceil((y2 - self.grid.y0 - self.grid.dy/2) / self.grid.dy))
-
-                while X != X2 and Y != Y2:
+                for (x,y) in zip(xs, ys):
                     X = int(math.ceil((x - self.grid.x0 - self.grid.dx/2) / self.grid.dx))
                     Y = int(math.ceil((y - self.grid.y0 - self.grid.dy/2) / self.grid.dy))
-                    if not (X < 0) and not (Y < 0) and not (X > self.grid.xnum-1) and not (Y > self.grid.ynum-1):
-                        fractures_maps[frac_family][Y][X] = 1
-                    x = x + fracture.growth_rate_x
-                    y = y + fracture.growth_rate_y
+                    fractures_maps[frac_family][Y][X] = 1
 
             self.fractures[frac_family]['frac_map'] = fractures_maps[frac_family]
-
         self.data['fractures']['data'] = (sum([fractures_maps[i] for i in range(len(self.fractures))]) > 0).astype(int)
         self.data['fractures']['mode'] = 'generate'
         return None
@@ -800,6 +790,8 @@ class GeologyManager():
         sys.exit("no such function yet")
 
     def show_fractures(self):
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
         for frac_family in self.fractures:
             for frac in self.fractures[frac_family]["fractures"]:
                 x0 = frac.position[0]
@@ -807,7 +799,9 @@ class GeologyManager():
                 x1 = frac.position[2]
                 y1 = frac.position[3]
                 plt.plot([x0, x1], [y0, y1] ,'orange')
+        ax.set_aspect('equal', adjustable='box')
         plt.show()
+        return None
 
     def show(self, frac_family=None):
         """
@@ -815,7 +809,7 @@ class GeologyManager():
         """
         grid = self._get_pyvista_grid()
         grid.cell_arrays["values"] = self.data["geology"]["data"].flatten(order="F")
-        
+
         p = pv.Plotter(shape=(2, 2))
 
         p.subplot(0, 0)
@@ -841,7 +835,7 @@ class GeologyManager():
 
         # Display the window
         p.show()
-    
+
     def _get_pyvista_grid(self):
         """
         Produce the pyvista grid.
